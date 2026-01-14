@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite" // sqlite driver for RPM DB and Java DB
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/api/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	vexrepo "github.com/aquasecurity/trivy/pkg/vex/repo"
@@ -25,6 +25,7 @@ import (
 	"github.com/kubewarden/sbomscanner/api"
 	storagev1alpha1 "github.com/kubewarden/sbomscanner/api/storage/v1alpha1"
 	"github.com/kubewarden/sbomscanner/api/v1alpha1"
+	"github.com/kubewarden/sbomscanner/internal/handlers/vulnerabilityreport"
 	vulnReport "github.com/kubewarden/sbomscanner/internal/handlers/vulnerabilityreport"
 	"github.com/kubewarden/sbomscanner/internal/messaging"
 )
@@ -236,11 +237,23 @@ func (h *ScanSBOMHandler) Handle(ctx context.Context, message messaging.Message)
 	}
 	summary := vulnReport.ComputeSummary(results)
 
+	// Get Trivy DB version from the trivy home dir used for this scan
+	dbVersion, dbErr := vulnerabilityreport.GetTrivyDBVersion(trivyHome)
+	if dbErr != nil {
+		h.logger.Warn("Could not determine Trivy DB version", "error", dbErr)
+	}
+
+	scannerDBVersion := map[string]string{}
+	if dbVersion != "" {
+		scannerDBVersion[storagev1alpha1.ScannerTrivy] = dbVersion
+	}
+
 	vulnerabilityReport := &storagev1alpha1.VulnerabilityReport{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sbom.Name,
 			Namespace: sbom.Namespace,
 		},
+		ScannerDBVersion: scannerDBVersion,
 	}
 	if err = controllerutil.SetControllerReference(sbom, vulnerabilityReport, h.scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference: %w", err)
@@ -258,13 +271,39 @@ func (h *ScanSBOMHandler) Handle(ctx context.Context, message messaging.Message)
 			Summary: summary,
 			Results: results,
 		}
+		vulnerabilityReport.ScannerDBVersion = scannerDBVersion
 		return nil
 	})
-	if err != nil {
+
+	if err == nil {
+		return nil
+	}
+
+	if !apierrors.IsConflict(err) {
 		return fmt.Errorf("failed to create or update vulnerability report: %w", err)
 	}
 
-	return nil
+	// On conflict, fetch the latest and compare DB versions
+	latest := &storagev1alpha1.VulnerabilityReport{}
+	getErr := h.k8sClient.Get(ctx, client.ObjectKey{Name: sbom.Name, Namespace: sbom.Namespace}, latest)
+	if getErr != nil {
+		return fmt.Errorf("conflict: failed to get latest VulnerabilityReport: %w", getErr)
+	}
+	latestVersion := latest.ScannerDBVersion[storagev1alpha1.ScannerTrivy]
+	newVersion := scannerDBVersion[storagev1alpha1.ScannerTrivy]
+	if latestVersion >= newVersion {
+		h.logger.Info("skipping update: existing report uses newer or same DB version",
+			"scanner", storagev1alpha1.ScannerTrivy,
+			"existing", latestVersion,
+			"new", newVersion)
+		return nil
+	}
+
+	// else, retry with updated resourceVersion
+	scannerDBVersion = latest.ScannerDBVersion
+	scannerDBVersion[storagev1alpha1.ScannerTrivy] = newVersion
+
+	return fmt.Errorf("failed to update VulnerabilityReport: %w", err)
 }
 
 // setupVEXHubRepositories creates all the necessary files and directories
