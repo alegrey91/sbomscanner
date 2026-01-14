@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite" // sqlite driver for RPM DB and Java DB
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/api/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	vexrepo "github.com/aquasecurity/trivy/pkg/vex/repo"
