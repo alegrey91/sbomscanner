@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path"
-	"time"
 
 	"go.yaml.in/yaml/v3"
 	_ "modernc.org/sqlite" // sqlite driver for RPM DB and Java DB
@@ -175,10 +174,10 @@ func (h *ScanSBOMHandler) Handle(ctx context.Context, message messaging.Message)
 			}
 			summary := vulnReport.ComputeSummary(results)
 
-			scannerDBVersion := map[string]time.Time{}
+			scannerDBVersion := map[string]metav1.Time{}
 			if trivyDBVersions != nil {
-				scannerDBVersion[storagev1alpha1.ScannerTrivyDB] = trivyDBVersions.VulnerabilityDB.UpdatedAt
-				scannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB] = trivyDBVersions.JavaDB.UpdatedAt
+				scannerDBVersion[storagev1alpha1.ScannerTrivyDB] = metav1.Time{Time: trivyDBVersions.VulnerabilityDB.UpdatedAt}
+				scannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB] = metav1.Time{Time: trivyDBVersions.JavaDB.UpdatedAt}
 			}
 			vulnerabilityReport := &storagev1alpha1.VulnerabilityReport{
 				ObjectMeta: metav1.ObjectMeta{
@@ -210,8 +209,8 @@ func (h *ScanSBOMHandler) Handle(ctx context.Context, message messaging.Message)
 		// and update the report
 		foundVulnDBVersion := latest.ScannerDBVersion[storagev1alpha1.ScannerTrivyDB]
 		foundJavaDBVersion := latest.ScannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB]
-		workerVulnDBVersion := trivyDBVersions.VulnerabilityDB.NextUpdate
-		workerJavaDBVersion := trivyDBVersions.JavaDB.NextUpdate
+		workerVulnDBVersion := &metav1.Time{Time: trivyDBVersions.VulnerabilityDB.NextUpdate}
+		workerJavaDBVersion := &metav1.Time{Time: trivyDBVersions.JavaDB.NextUpdate}
 
 		if (foundVulnDBVersion.Before(workerVulnDBVersion) || foundVulnDBVersion.Equal(workerVulnDBVersion)) &&
 			(foundJavaDBVersion.Before(workerJavaDBVersion) || foundJavaDBVersion.Equal(workerJavaDBVersion)) {
@@ -242,9 +241,9 @@ func (h *ScanSBOMHandler) Handle(ctx context.Context, message messaging.Message)
 		}
 		summary := vulnReport.ComputeSummary(results)
 
-		scannerDBVersion := map[string]time.Time{}
-		scannerDBVersion[storagev1alpha1.ScannerTrivyDB] = workerVulnDBVersion
-		scannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB] = workerJavaDBVersion
+		scannerDBVersion := map[string]metav1.Time{}
+		scannerDBVersion[storagev1alpha1.ScannerTrivyDB] = *workerVulnDBVersion
+		scannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB] = *workerJavaDBVersion
 
 		vulnerabilityReport := &storagev1alpha1.VulnerabilityReport{
 			ObjectMeta: metav1.ObjectMeta{
