@@ -20,7 +20,6 @@ import (
 
 	"github.com/aquasecurity/trivy/pkg/version"
 	vexrepo "github.com/aquasecurity/trivy/pkg/vex/repo"
-	"github.com/spf13/cobra"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -148,125 +147,82 @@ func (h *ScanSBOMHandler) Handle(ctx context.Context, message messaging.Message)
 		return fmt.Errorf("could not get trivy DB versions: %w", err)
 	}
 
-	app := trivyCommands.NewApp()
-
+	var report *storagev1alpha1.Report
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		latest := &storagev1alpha1.VulnerabilityReport{}
-		err = h.k8sClient.Get(ctx, client.ObjectKey{Name: sbom.Name, Namespace: sbom.Namespace}, latest)
-		if apierrors.IsNotFound(err) {
-			reportOrig, err := h.scanSBOM(ctx, app, sbom, trivyHome)
-			if err != nil {
-				return fmt.Errorf("failed to scan SBOM: %w", err)
-			}
-
-			h.logger.InfoContext(ctx, "SBOM scanned",
-				"sbom", scanSBOMMessage.SBOM.Name,
-				"namespace", scanSBOMMessage.SBOM.Namespace,
-			)
-
-			if err = message.InProgress(); err != nil {
-				return fmt.Errorf("failed to ack message as in progress: %w", err)
-			}
-
-			results, err := vulnReport.NewFromTrivyResults(reportOrig)
-			if err != nil {
-				return fmt.Errorf("failed to convert from trivy results: %w", err)
-			}
-			summary := vulnReport.ComputeSummary(results)
-
-			scannerDBVersion := map[string]metav1.Time{}
-			if trivyDBVersions != nil {
-				scannerDBVersion[storagev1alpha1.ScannerTrivyDB] = metav1.Time{Time: trivyDBVersions.VulnerabilityDB.UpdatedAt}
-				scannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB] = metav1.Time{Time: trivyDBVersions.JavaDB.UpdatedAt}
-			}
-			vulnerabilityReport := &storagev1alpha1.VulnerabilityReport{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      sbom.Name,
-					Namespace: sbom.Namespace,
-					Labels: map[string]string{
-						v1alpha1.LabelScanJobUIDKey: string(scanJob.UID),
-						api.LabelManagedByKey:       api.LabelManagedByValue,
-						api.LabelPartOfKey:          api.LabelPartOfValue,
-					},
-				},
-				ImageMetadata:    sbom.GetImageMetadata(),
-				ScannerDBVersion: scannerDBVersion,
-				Report: storagev1alpha1.Report{
-					Summary: summary,
-					Results: results,
-				},
-			}
-			if err = controllerutil.SetControllerReference(sbom, vulnerabilityReport, h.scheme); err != nil {
-				return fmt.Errorf("failed to set owner reference: %w", err)
-			}
-
-			return h.k8sClient.Create(ctx, vulnerabilityReport)
-		}
-
-		// check DB datase versions:
-		// if both DB versions are newer or equal, skip the scan
-		// otherwise, proceed with the scan
-		// and update the report
-		foundVulnDBVersion := latest.ScannerDBVersion[storagev1alpha1.ScannerTrivyDB]
-		foundJavaDBVersion := latest.ScannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB]
-		workerVulnDBVersion := &metav1.Time{Time: trivyDBVersions.VulnerabilityDB.NextUpdate}
-		workerJavaDBVersion := &metav1.Time{Time: trivyDBVersions.JavaDB.NextUpdate}
-
-		if (foundVulnDBVersion.Before(workerVulnDBVersion) || foundVulnDBVersion.Equal(workerVulnDBVersion)) &&
-			(foundJavaDBVersion.Before(workerJavaDBVersion) || foundJavaDBVersion.Equal(workerJavaDBVersion)) {
-			h.logger.Info("skipping scan: found report uses newer or same DB version(s)",
-				"scanner", storagev1alpha1.ScannerTrivyDB,
-				"found VulnerabilityDB", foundVulnDBVersion, "worker VulnerabilityDB", workerVulnDBVersion,
-				"found JavaDB", foundJavaDBVersion, "worker JavaDB", workerJavaDBVersion)
-			return nil
-		}
-
-		reportOrig, err := h.scanSBOM(ctx, app, sbom, trivyHome)
-		if err != nil {
-			return fmt.Errorf("failed to scan SBOM: %w", err)
-		}
-
-		h.logger.InfoContext(ctx, "SBOM scanned",
-			"sbom", scanSBOMMessage.SBOM.Name,
-			"namespace", scanSBOMMessage.SBOM.Namespace,
-		)
-
-		if err = message.InProgress(); err != nil {
-			return fmt.Errorf("failed to ack message as in progress: %w", err)
-		}
-
-		results, err := vulnReport.NewFromTrivyResults(reportOrig)
-		if err != nil {
-			return fmt.Errorf("failed to convert from trivy results: %w", err)
-		}
-		summary := vulnReport.ComputeSummary(results)
-
-		scannerDBVersion := map[string]metav1.Time{}
-		scannerDBVersion[storagev1alpha1.ScannerTrivyDB] = *workerVulnDBVersion
-		scannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB] = *workerJavaDBVersion
-
 		vulnerabilityReport := &storagev1alpha1.VulnerabilityReport{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      sbom.Name,
 				Namespace: sbom.Namespace,
-				Labels: map[string]string{
-					v1alpha1.LabelScanJobUIDKey: string(scanJob.UID),
-					api.LabelManagedByKey:       api.LabelManagedByValue,
-					api.LabelPartOfKey:          api.LabelPartOfValue,
-				},
 			},
-			ImageMetadata:    sbom.GetImageMetadata(),
-			ScannerDBVersion: scannerDBVersion,
-			Report: storagev1alpha1.Report{
-				Summary: summary,
-				Results: results,
-			},
-		}
-		if err = controllerutil.SetControllerReference(sbom, vulnerabilityReport, h.scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference: %w", err)
 		}
 
-		return h.k8sClient.Update(ctx, vulnerabilityReport)
+		workerVulnDBVersion := metav1.Time{Time: trivyDBVersions.VulnerabilityDB.UpdatedAt}
+		workerJavaDBVersion := metav1.Time{Time: trivyDBVersions.JavaDB.UpdatedAt}
+
+		_, err := controllerutil.CreateOrUpdate(ctx, h.k8sClient, vulnerabilityReport, func() error {
+			// Check if this is an update and we should skip based on DB versions
+			if !vulnerabilityReport.CreationTimestamp.IsZero() {
+				// This is an existing resource, check DB versions
+				foundVulnDBVersion := vulnerabilityReport.ScannerDBVersion[storagev1alpha1.ScannerTrivyDB]
+				foundJavaDBVersion := vulnerabilityReport.ScannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB]
+
+				if (foundVulnDBVersion.Before(&workerVulnDBVersion) || foundVulnDBVersion.Equal(&workerVulnDBVersion)) &&
+					(foundJavaDBVersion.Before(&workerJavaDBVersion) || foundJavaDBVersion.Equal(&workerJavaDBVersion)) {
+					h.logger.Info("skipping scan: found report uses newer or same DB version(s)",
+						"scanner", storagev1alpha1.ScannerTrivyDB,
+						"found VulnerabilityDB", foundVulnDBVersion, "worker VulnerabilityDB", workerVulnDBVersion,
+						"found JavaDB", foundJavaDBVersion, "worker JavaDB", workerJavaDBVersion)
+					// Return nil to signal no changes needed
+					return nil
+				}
+			}
+
+			if report == nil {
+				reportOrig, err := h.scanSBOM(ctx, sbom, trivyHome)
+				if err != nil {
+					return fmt.Errorf("failed to scan SBOM: %w", err)
+				}
+
+				h.logger.InfoContext(ctx, "SBOM scanned",
+					"sbom", scanSBOMMessage.SBOM.Name,
+					"namespace", scanSBOMMessage.SBOM.Namespace,
+				)
+
+				if err = message.InProgress(); err != nil {
+					return fmt.Errorf("failed to ack message as in progress: %w", err)
+				}
+
+				results, err := vulnReport.NewFromTrivyResults(reportOrig)
+				if err != nil {
+					return fmt.Errorf("failed to convert from trivy results: %w", err)
+				}
+				summary := vulnReport.ComputeSummary(results)
+				report = &storagev1alpha1.Report{
+					Summary: summary,
+					Results: results,
+				}
+			}
+
+			scannerDBVersion := map[string]metav1.Time{}
+			if trivyDBVersions != nil {
+				scannerDBVersion[storagev1alpha1.ScannerTrivyDB] = workerVulnDBVersion
+				scannerDBVersion[storagev1alpha1.ScannerTrivyJavaDB] = workerJavaDBVersion
+			}
+
+			// Mutate the object
+			vulnerabilityReport.Labels = map[string]string{
+				v1alpha1.LabelScanJobUIDKey: string(scanJob.UID),
+				api.LabelManagedByKey:       api.LabelManagedByValue,
+				api.LabelPartOfKey:          api.LabelPartOfValue,
+			}
+			vulnerabilityReport.ImageMetadata = sbom.GetImageMetadata()
+			vulnerabilityReport.ScannerDBVersion = scannerDBVersion
+			vulnerabilityReport.Report = *report
+
+			return controllerutil.SetControllerReference(sbom, vulnerabilityReport, h.scheme)
+		})
+
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create or update the VulnerabilityReport: %w", err)
@@ -276,7 +232,7 @@ func (h *ScanSBOMHandler) Handle(ctx context.Context, message messaging.Message)
 }
 
 // scanSBOM scans the provided SBOM using trivy and returns the vulnerability report.
-func (h *ScanSBOMHandler) scanSBOM(ctx context.Context, app *cobra.Command, sbom *storagev1alpha1.SBOM, trivyHome string) (trivyTypes.Report, error) {
+func (h *ScanSBOMHandler) scanSBOM(ctx context.Context, sbom *storagev1alpha1.SBOM, trivyHome string) (trivyTypes.Report, error) {
 	vexHubList := &v1alpha1.VEXHubList{}
 	err := h.k8sClient.List(ctx, vexHubList, &client.ListOptions{})
 	if err != nil {
@@ -315,6 +271,7 @@ func (h *ScanSBOMHandler) scanSBOM(ctx context.Context, app *cobra.Command, sbom
 		}
 	}()
 
+	app := trivyCommands.NewApp()
 	trivyArgs := []string{
 		"sbom",
 		"--skip-version-check",
@@ -408,7 +365,8 @@ func (h *ScanSBOMHandler) setupVEXHubRepositories(vexHubList *v1alpha1.VEXHubLis
 // updateTrivyVulnerabilityDB executes the Trivy VulnerabilityDB check command and returns the parsed metadata.Metadata
 func (h *ScanSBOMHandler) updateTrivyVulnerabilityDB(ctx context.Context, trivyDBRepository string) error {
 	app := trivyCommands.NewApp()
-	app.SetArgs([]string{"image",
+	app.SetArgs([]string{
+		"image",
 		"--download-db-only",
 		"--db-repository", trivyDBRepository,
 		"--format", "json",
@@ -423,7 +381,8 @@ func (h *ScanSBOMHandler) updateTrivyVulnerabilityDB(ctx context.Context, trivyD
 // updateTrivyJavaDB executes the Trivy JavaDB check command and returns the parsed metadata.Metadata
 func (h *ScanSBOMHandler) updateTrivyJavaDB(ctx context.Context, trivyJavaDBRepository string) error {
 	app := trivyCommands.NewApp()
-	app.SetArgs([]string{"image",
+	app.SetArgs([]string{
+		"image",
 		"--download-java-db-only",
 		"--java-db-repository", trivyJavaDBRepository,
 		"--format", "json",
@@ -440,9 +399,11 @@ func (h *ScanSBOMHandler) getTrivyDBVersions(ctx context.Context) (*version.Vers
 	app := trivyCommands.NewApp()
 	buf := new(bytes.Buffer)
 	app.SetOut(buf)
-	app.SetArgs([]string{"version",
+	app.SetArgs([]string{
+		"version",
 		"--format", "json",
-		"--cache-dir", h.workDir})
+		"--cache-dir", h.workDir,
+	})
 	if err := app.ExecuteContext(ctx); err != nil {
 		return nil, err
 	}
