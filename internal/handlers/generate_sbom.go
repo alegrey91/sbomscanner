@@ -267,14 +267,14 @@ func (h *GenerateSBOMHandler) generateSPDX(ctx context.Context, image *storagev1
 		"--output", sbomFile.Name(),
 	}
 
-	// Handle insecure connection flag
+	// Handle insecure connection flag or CA bundle
+	// If Insecure is true, use --insecure flag
+	// Otherwise, if CABundle is set, use --cacert flag
 	if registry.Spec.Insecure {
 		trivyArgs = append(trivyArgs, "--insecure")
-	}
-
-	// Handle CA bundle
-	var caBundleFile *os.File
-	if registry.Spec.CABundle != "" {
+	} else if registry.Spec.CABundle != "" {
+		// Handle CA bundle
+		var caBundleFile *os.File
 		caBundleFile, err = os.CreateTemp(h.workDir, "ca-bundle-*.crt")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CA bundle file: %w", err)

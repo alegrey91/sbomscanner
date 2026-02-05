@@ -976,3 +976,123 @@ Namespace: image.Namespace,
 require.NoError(t, err)
 assert.Equal(t, image.ImageMetadata, sbom.ImageMetadata)
 }
+
+func TestGenerateSBOMHandler_Handle_InsecureAndCABundleRegistry(t *testing.T) {
+// Test that when both Insecure and CABundle are set, only --insecure is used
+image := &storagev1alpha1.Image{
+ObjectMeta: metav1.ObjectMeta{
+Name:      "test-image",
+Namespace: "default",
+},
+ImageMetadata: storagev1alpha1.ImageMetadata{
+Registry:    "ghcr",
+RegistryURI: "ghcr.io/kubewarden/sbomscanner/test-assets",
+Repository:  "golang",
+Tag:         "1.12-alpine",
+Platform:    "linux/amd64",
+Digest:      imageDigestLinuxAmd64MultiArch,
+},
+}
+
+caBundle := `-----BEGIN CERTIFICATE-----
+MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF
+-----END CERTIFICATE-----`
+
+registry := &v1alpha1.Registry{
+ObjectMeta: metav1.ObjectMeta{
+Name:      "test-registry",
+Namespace: "default",
+},
+Spec: v1alpha1.RegistrySpec{
+URI:      "test.io",
+Insecure: true,    // Both set
+CABundle: caBundle, // Both set
+},
+}
+registryData, err := json.Marshal(registry)
+require.NoError(t, err)
+
+scanJob := &v1alpha1.ScanJob{
+ObjectMeta: metav1.ObjectMeta{
+Name:      "test-scanjob",
+Namespace: "default",
+UID:       "test-scanjob-uid",
+Annotations: map[string]string{
+v1alpha1.AnnotationScanJobRegistryKey: string(registryData),
+},
+},
+Spec: v1alpha1.ScanJobSpec{
+Registry: "test-registry",
+},
+}
+
+scheme := scheme.Scheme
+err = storagev1alpha1.AddToScheme(scheme)
+require.NoError(t, err)
+err = v1alpha1.AddToScheme(scheme)
+require.NoError(t, err)
+k8sClient := fake.NewClientBuilder().
+WithScheme(scheme).
+WithRuntimeObjects(image, registry, scanJob).
+WithIndex(&storagev1alpha1.SBOM{}, storagev1alpha1.IndexImageMetadataDigest, func(obj client.Object) []string {
+sbom, ok := obj.(*storagev1alpha1.SBOM)
+if !ok {
+return nil
+}
+return []string{sbom.GetImageMetadata().Digest}
+}).
+Build()
+
+publisher := messagingMocks.NewMockPublisher(t)
+
+expectedScanMessage, err := json.Marshal(&ScanSBOMMessage{
+BaseMessage: BaseMessage{
+ScanJob: ObjectRef{
+Name:      scanJob.Name,
+Namespace: scanJob.Namespace,
+UID:       string(scanJob.UID),
+},
+},
+SBOM: ObjectRef{
+Name:      image.Name,
+Namespace: image.Namespace,
+},
+})
+require.NoError(t, err)
+
+publisher.On("Publish",
+mock.Anything,
+ScanSBOMSubject,
+fmt.Sprintf("scanSBOM/%s/%s", scanJob.UID, image.Name),
+expectedScanMessage,
+).Return(nil).Once()
+
+handler := NewGenerateSBOMHandler(k8sClient, scheme, "/tmp", testTrivyJavaDBRepository, publisher, slog.Default())
+
+message, err := json.Marshal(&GenerateSBOMMessage{
+BaseMessage: BaseMessage{
+ScanJob: ObjectRef{
+Name:      scanJob.Name,
+Namespace: scanJob.Namespace,
+UID:       string(scanJob.UID),
+},
+},
+Image: ObjectRef{
+Name:      image.Name,
+Namespace: image.Namespace,
+},
+})
+require.NoError(t, err)
+
+err = handler.Handle(t.Context(), &testMessage{data: message})
+require.NoError(t, err)
+
+// Verify SBOM was created
+sbom := &storagev1alpha1.SBOM{}
+err = k8sClient.Get(t.Context(), types.NamespacedName{
+Name:      image.Name,
+Namespace: image.Namespace,
+}, sbom)
+require.NoError(t, err)
+assert.Equal(t, image.ImageMetadata, sbom.ImageMetadata)
+}
