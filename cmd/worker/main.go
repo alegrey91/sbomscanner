@@ -143,7 +143,7 @@ func main() {
 	}
 
 	var scanMode messaging.HandlerScan
-	var durableName string
+	durableName := "worker"
 	switch mode {
 	case "registry":
 		scanMode = messaging.HandlerScan{
@@ -151,7 +151,6 @@ func main() {
 			handlers.GenerateSBOMSubject:  handlers.NewGenerateSBOMHandler(k8sClient, scheme, runDir, trivyJavaDBRepository, publisher, installationNamespace, logger),
 			handlers.ScanSBOMSubject:      handlers.NewScanSBOMHandler(k8sClient, scheme, runDir, trivyDBRepository, trivyJavaDBRepository, logger),
 		}
-		durableName = "worker-registry"
 	case "node":
 		scanMode = messaging.HandlerScan{
 			handlers.GenerateNodeSBOMSubject + "." + nodeName: handlers.NewGenerateNodeSBOMHandler(k8sClient, scheme, runDir, trivyJavaDBRepository, publisher, installationNamespace, logger),
