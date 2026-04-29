@@ -22,6 +22,7 @@ import (
 	storagev1alpha1 "github.com/kubewarden/sbomscanner/api/storage/v1alpha1"
 	"github.com/kubewarden/sbomscanner/api/v1alpha1"
 	"github.com/kubewarden/sbomscanner/internal/messaging"
+	"github.com/kubewarden/sbomscanner/internal/skippatterns"
 )
 
 // GenerateNodeSBOMHandler is responsible for handling SBOM generation requests.
@@ -176,7 +177,7 @@ func (h *GenerateNodeSBOMHandler) getOrGenerateNodeSBOM(ctx context.Context, nod
 		spdxBytes = existingSBOM.SPDX.Raw
 	} else {
 		h.logger.InfoContext(ctx, "No existing NodeSBOM found, generating new one", "node name", node.Name)
-		spdxBytes, err = h.generateSPDX(ctx, node)
+		spdxBytes, err = h.generateSPDX(ctx, node, config.Spec.SkipPatterns)
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +229,7 @@ func (h *GenerateNodeSBOMHandler) findSBOMByNodeName(ctx context.Context, nodeNa
 // generateSPDX generates SPDX JSON content for an image using Trivy.
 //
 //nolint:gocognit // This function can't be easily split into smaller parts.
-func (h *GenerateNodeSBOMHandler) generateSPDX(ctx context.Context, node *corev1.Node) ([]byte, error) {
+func (h *GenerateNodeSBOMHandler) generateSPDX(ctx context.Context, node *corev1.Node, skipPats []string) ([]byte, error) {
 	sbomFile, err := os.CreateTemp(h.workDir, "trivy.sbom.*.json")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary SBOM file: %w", err)
@@ -253,8 +254,17 @@ func (h *GenerateNodeSBOMHandler) generateSPDX(ctx context.Context, node *corev1
 		// See: https://github.com/aquasecurity/trivy/discussions/9666
 		"--java-db-repository", h.trivyJavaDBRepository,
 		"--output", sbomFile.Name(),
-		"/host", // Scan the entire filesystem of the node
 	}
+
+	parsed := skippatterns.Parse(skipPats)
+	for _, dir := range parsed.SkipDirs {
+		args = append(args, "--skip-dirs", dir)
+	}
+	for _, file := range parsed.SkipFiles {
+		args = append(args, "--skip-files", file)
+	}
+
+	args = append(args, "/host")
 
 	app := trivyCommands.NewApp()
 	app.SetArgs(args)

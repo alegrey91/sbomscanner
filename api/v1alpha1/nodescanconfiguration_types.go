@@ -20,9 +20,12 @@ type NodeScanConfigurationSpec struct {
 	// +optional
 	ScanInterval *metav1.Duration `json:"scanInterval,omitempty"`
 
-	// Skip specifies which directories/files to skip during node scanning.
+	// SkipPatterns specifies gitignore-style patterns for directories and files to skip during node scanning.
+	// Patterns ending with "/" are treated as directories (passed to trivy's --skip-dirs).
+	// All other patterns are treated as files (passed to trivy's --skip-files).
+	// Glob patterns like "**/vendor/" or "*.min.js" are supported.
 	// +optional
-	Skip []string `json:"skip,omitempty"`
+	SkipPatterns []string `json:"skipPatterns,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -3,14 +3,19 @@ kind: NodeScanConfiguration
 metadata:
   name: default
 spec:
-  skip:
-    - /tmp
-    - /var/tmp
-    - /var/cache
+  skipPatterns:
+    - "/tmp/"
+    - "/var/tmp/"
+    - "/var/cache/"
+    - "node_modules/"
+    - "**/vendor/"
+    - ".git/"
+    - "*.min.js"
+    - "package-lock.json"
   scanInterval: 2m
   nodeSelector:
     matchExpressions:
-      - key: kubernetes.io/os
+      - key: kubernetes.io/hostname
         operator: In
         values:
-          - linux
+          - k3d-second-node-0

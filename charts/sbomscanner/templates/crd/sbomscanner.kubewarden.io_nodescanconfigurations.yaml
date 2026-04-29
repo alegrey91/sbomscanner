@@ -94,9 +94,12 @@ spec:
               scanInterval:
                 description: ScanInterval is the interval at which nodes are scanned.
                 type: string
-              skip:
-                description: Skip specifies which directories/files to skip during
-                  node scanning.
+              skipPatterns:
+                description: |-
+                  SkipPatterns specifies gitignore-style patterns for directories and files to skip during node scanning.
+                  Patterns ending with "/" are treated as directories (passed to trivy's --skip-dirs).
+                  All other patterns are treated as files (passed to trivy's --skip-files).
+                  Glob patterns like "**/vendor/" or "*.min.js" are supported.
                 items:
                   type: string
                 type: array

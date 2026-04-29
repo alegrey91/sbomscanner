@@ -102,8 +102,8 @@ func (in *NodeScanConfigurationSpec) DeepCopyInto(out *NodeScanConfigurationSpec
 		*out = new(v1.Duration)
 		**out = **in
 	}
-	if in.Skip != nil {
-		in, out := &in.Skip, &out.Skip
+	if in.SkipPatterns != nil {
+		in, out := &in.SkipPatterns, &out.SkipPatterns
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
